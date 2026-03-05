@@ -189,6 +189,89 @@ class AgenticSearch(BaseSearch):
         )
         return [cwd]
 
+    @staticmethod
+    def validate_search_paths(
+        paths: List[str],
+        *,
+        require_exists: bool = False,
+    ) -> List[str]:
+        """Sanitise and validate a list of search paths or URLs.
+
+        Performs cross-platform checks for argument-injection, null-byte
+        injection, and (optionally) filesystem existence.  Invalid entries
+        are silently dropped with a warning log so that one bad element
+        does not abort the entire search.
+
+        Args:
+            paths: Raw path/URL strings from the caller.
+            require_exists: When *True*, filesystem paths that do not
+                exist on disk are also rejected.
+
+        Returns:
+            A deduplicated list of safe paths/URLs (order-preserved).
+        """
+        from urllib.parse import urlparse
+
+        seen: set = set()
+        clean: List[str] = []
+
+        for raw in paths:
+            p = str(raw).strip()
+
+            if not p:
+                continue
+
+            # Null-byte injection
+            if "\x00" in p:
+                _loguru_logger.warning(
+                    f"[validate] Rejected path containing null byte: {p!r}"
+                )
+                continue
+
+            # Detect URLs and validate separately
+            if p.startswith(("http://", "https://", "ftp://", "ftps://")):
+                parsed = urlparse(p)
+                if not parsed.hostname:
+                    _loguru_logger.warning(
+                        f"[validate] Rejected malformed URL (no host): {p}"
+                    )
+                    continue
+                if p not in seen:
+                    seen.add(p)
+                    clean.append(p)
+                continue
+
+            # Argument-injection: paths starting with a hyphen can be
+            # misinterpreted as CLI flags by rga / ripgrep.
+            if p.startswith("-"):
+                _loguru_logger.warning(
+                    f"[validate] Rejected path starting with hyphen "
+                    f"(possible argument injection): {p}"
+                )
+                continue
+
+            # Resolve to an absolute, normalised path (handles `..`, `~`,
+            # symlinks, and mixed separators on Windows).
+            try:
+                resolved = str(Path(p).expanduser().resolve())
+            except (OSError, ValueError) as exc:
+                _loguru_logger.warning(
+                    f"[validate] Rejected unresolvable path: {p} ({exc})"
+                )
+                continue
+
+            if require_exists and not os.path.exists(resolved):
+                _loguru_logger.warning(
+                    f"[validate] Rejected non-existent path: {resolved}"
+                )
+                continue
+
+            if resolved not in seen:
+                seen.add(resolved)
+                clean.append(resolved)
+
+        return clean
+
     def _load_historical_knowledge(self):
         """Load historical knowledge clusters from local cache"""
         try:
@@ -806,7 +889,17 @@ class AgenticSearch(BaseSearch):
               ``cluster``, and telemetry in a single object.
             - ``List[Dict]``: File matches in FILENAME_ONLY mode.
         """
-        paths = self._resolve_paths(paths)
+        paths = self.validate_search_paths(
+            self._resolve_paths(paths),
+        )
+        if not paths:
+            msg = "No valid search paths remain after validation."
+            _loguru_logger.warning(msg)
+            if return_context:
+                ctx = SearchContext()
+                ctx.answer = msg
+                return ctx
+            return msg
 
         # ---- FILENAME_ONLY: pattern-based file discovery, no LLM ----
         if mode == "FILENAME_ONLY":
@@ -1247,8 +1340,10 @@ class AgenticSearch(BaseSearch):
         self._add_query_to_cluster(cluster, query)
         try:
             await self._save_cluster_with_embedding(cluster)
-        except Exception:
-            pass
+        except Exception as exc:
+            _loguru_logger.warning(
+                f"[FAST] Failed to save cluster with embedding: {exc}"
+            )
 
         await self._logger.success("[FAST] Search complete (2 LLM calls)")
         return answer, cluster, context

@@ -1310,14 +1310,21 @@ async def get_search_suggestions(query: str, kb_name: str = "", limit: int = 8):
     if not query or len(query.strip()) < 2:
         return {"success": True, "data": [], "query": query}
 
-    paths = [p.strip() for p in kb_name.split(",") if p.strip()] if kb_name else []
-    if not paths:
+    raw_paths = [p.strip() for p in kb_name.split(",") if p.strip()] if kb_name else []
+    if not raw_paths:
         return {"success": True, "data": [], "query": query}
 
     try:
         from sirchmunk.retrieve.text_retriever import GrepRetriever
+        from sirchmunk.search import AgenticSearch
         from sirchmunk.utils.constants import DEFAULT_SIRCHMUNK_WORK_PATH
         import re as _re
+
+        paths = AgenticSearch.validate_search_paths(
+            raw_paths, require_exists=True,
+        )
+        if not paths:
+            return {"success": True, "data": [], "query": query}
 
         retriever = GrepRetriever(work_path=DEFAULT_SIRCHMUNK_WORK_PATH)
         escaped = _re.escape(query.strip())
