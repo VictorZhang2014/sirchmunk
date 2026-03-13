@@ -42,7 +42,6 @@ from sirchmunk.utils.utils import (
     extract_fields,
 )
 
-
 # Only for quick simple-chat intent detection to reduce unnecessary LLM calls
 _CHAT_QUERY_RE = re.compile(
     r"^("
@@ -80,14 +79,14 @@ _CHAT_RESPONSE_SYSTEM = (
 class AgenticSearch(BaseSearch):
 
     def __init__(
-        self,
-        llm: Optional[OpenAIChat] = None,
-        work_path: Optional[Union[str, Path]] = None,
-        paths: Optional[Union[str, Path, List[str], List[Path]]] = None,
-        verbose: bool = True,
-        log_callback: LogCallback = None,
-        reuse_knowledge: bool = True,
-        **kwargs,
+            self,
+            llm: Optional[OpenAIChat] = None,
+            work_path: Optional[Union[str, Path]] = None,
+            paths: Optional[Union[str, Path, List[str], List[Path]]] = None,
+            verbose: bool = True,
+            log_callback: LogCallback = None,
+            reuse_knowledge: bool = True,
+            **kwargs,
     ):
         super().__init__(**kwargs)
 
@@ -126,7 +125,7 @@ class AgenticSearch(BaseSearch):
 
         # Initialize KnowledgeManager for persistent storage
         self.knowledge_storage = KnowledgeStorage(work_path=str(self.work_path))
-        
+
         # Load historical knowledge clusters from cache
         self._load_historical_knowledge()
 
@@ -190,7 +189,7 @@ class AgenticSearch(BaseSearch):
         self.spec_path: Path = self.work_path / ".cache" / "spec"
         self.spec_path.mkdir(parents=True, exist_ok=True)
         self._spec_lock = asyncio.Lock()  # guards concurrent spec writes
-    
+
     def update_log_callback(self, log_callback: LogCallback = None) -> None:
         """Replace the per-request log callback on all sub-components.
 
@@ -211,8 +210,8 @@ class AgenticSearch(BaseSearch):
         self.llm_usages = []
 
     def _resolve_paths(
-        self,
-        paths: Optional[Union[str, Path, List[str], List[Path]]],
+            self,
+            paths: Optional[Union[str, Path, List[str], List[Path]]],
     ) -> List[str]:
         """Resolve and normalise paths with layered fallback.
 
@@ -246,9 +245,9 @@ class AgenticSearch(BaseSearch):
 
     @staticmethod
     def validate_search_paths(
-        paths: List[str],
-        *,
-        require_exists: bool = False,
+            paths: List[str],
+            *,
+            require_exists: bool = False,
     ) -> List[str]:
         """Sanitise and validate a list of search paths or URLs.
 
@@ -336,7 +335,7 @@ class AgenticSearch(BaseSearch):
             print(f"Loaded {cluster_count} historical knowledge clusters from cache")
         except Exception as e:
             print(f"[WARNING] Failed to load historical knowledge: {e}")
-    
+
     async def _try_reuse_cluster(self, query: str) -> Optional[KnowledgeCluster]:
         """Try to reuse existing knowledge cluster based on semantic similarity.
 
@@ -439,12 +438,12 @@ class AgenticSearch(BaseSearch):
                 f"Failed to search similar clusters: {e}. Falling back to full search."
             )
             return None
-    
+
     def _add_query_to_cluster(self, cluster: KnowledgeCluster, query: str) -> None:
         """
         Add query to cluster's queries list with FIFO strategy.
         Keeps only the most recent N queries (where N = max_queries_per_cluster).
-        
+
         Args:
             cluster: KnowledgeCluster to update
             query: New query to add
@@ -452,12 +451,12 @@ class AgenticSearch(BaseSearch):
         # Add query if not already present
         if query not in cluster.queries:
             cluster.queries.append(query)
-        
+
         # Apply FIFO strategy: keep only the most recent N queries
         if len(cluster.queries) > self.max_queries_per_cluster:
             # Remove oldest queries (from the beginning)
             cluster.queries = cluster.queries[-self.max_queries_per_cluster:]
-    
+
     async def _save_cluster_with_embedding(self, cluster: KnowledgeCluster) -> None:
         """Save knowledge cluster to persistent storage, compute embedding, and flush to parquet.
 
@@ -537,13 +536,13 @@ class AgenticSearch(BaseSearch):
             self.knowledge_storage.force_sync()
         except Exception as e:
             await self._logger.warning(f"Parquet force_sync failed: {e}")
-    
+
     @staticmethod
     def _make_answer_cluster(
-        query: str,
-        answer: str,
-        prefix: str = "FS",
-        file_paths: Optional[List[str]] = None,
+            query: str,
+            answer: str,
+            prefix: str = "FS",
+            file_paths: Optional[List[str]] = None,
     ) -> KnowledgeCluster:
         """Create a fallback KnowledgeCluster wrapping an answer string.
 
@@ -555,12 +554,30 @@ class AgenticSearch(BaseSearch):
         resources = [
             {"type": "file", "value": fp} for fp in (file_paths or [])
         ]
+        # Build evidences from file_paths so return_context=True yields non-empty evidences
+        # Use answer content as snippets since we don't have raw evidence in this fallback path
+        answer_snippet = answer if answer else ""
+        evidences: List[EvidenceUnit] = []
+        for i, fp in enumerate(file_paths or []):
+            doc_id = hashlib.sha256(fp.encode("utf-8")).hexdigest()[:12]
+            evidences.append(
+                EvidenceUnit(
+                    doc_id=doc_id,
+                    file_or_url=fp,
+                    summary=answer if answer else f"Source file for: {query[:500]}",
+                    is_found=True,
+                    # First evidence gets the answer snippet; others get empty to avoid duplication
+                    snippets=[answer_snippet] if i == 0 and answer_snippet else [],
+                    extracted_at=datetime.now(timezone.utc),
+                )
+            )
         return KnowledgeCluster(
             id=f"{prefix}{_digest}",
             name=query[:60],
             description=[f"Search result for: {query}"],
             content=answer,
             queries=[query],
+            evidences=evidences if evidences else None,
             search_results=list(file_paths or []),
             resources=resources or None,
             confidence=0.5,
@@ -571,11 +588,11 @@ class AgenticSearch(BaseSearch):
 
     @staticmethod
     def _build_fast_cluster(
-        query: str,
-        answer: str,
-        file_path: str,
-        evidence: str,
-        keywords: List[str],
+            query: str,
+            answer: str,
+            file_path: str,
+            evidence: str,
+            keywords: List[str],
     ) -> KnowledgeCluster:
         """Build a KnowledgeCluster from FAST-mode grep evidence.
 
@@ -612,18 +629,18 @@ class AgenticSearch(BaseSearch):
         )
 
     async def _search_by_filename(
-        self,
-        query: str,
-        paths: Union[str, Path, List[str], List[Path]],
-        max_depth: Optional[int] = 5,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
-        grep_timeout: Optional[float] = 60.0,
-        top_k: Optional[int] = 10,
+            self,
+            query: str,
+            paths: Union[str, Path, List[str], List[Path]],
+            max_depth: Optional[int] = 5,
+            include: Optional[List[str]] = None,
+            exclude: Optional[List[str]] = None,
+            grep_timeout: Optional[float] = 60.0,
+            top_k: Optional[int] = 10,
     ) -> List[Dict[str, Any]]:
         """
         Perform filename-only search without LLM keyword extraction.
-        
+
         Args:
             query: Search query (used as filename pattern)
             paths: Paths to search in
@@ -632,15 +649,15 @@ class AgenticSearch(BaseSearch):
             exclude: File patterns to exclude
             grep_timeout: Timeout for grep operations
             top_k: Maximum number of results to return
-        
+
         Returns:
             List of file matches with metadata
         """
         await self._logger.info("Performing filename-only search...")
-        
+
         # Extract potential filename patterns from query
         patterns = []
-        
+
         # Check if query looks like a file pattern (contains file extensions or wildcards)
         if any(char in query for char in ['*', '?', '[', ']']):
             # Treat as direct glob/regex pattern
@@ -649,11 +666,11 @@ class AgenticSearch(BaseSearch):
         else:
             # Split into words and create flexible patterns
             words = [w.strip() for w in query.strip().split() if w.strip()]
-            
+
             if not words:
                 await self._logger.warning("No valid words in query")
                 return []
-            
+
             # Strategy: Create patterns for each word that match anywhere in filename
             # Use non-greedy matching and case-insensitive by default
             for word in words:
@@ -663,13 +680,13 @@ class AgenticSearch(BaseSearch):
                 pattern = f".*{escaped_word}.*"
                 patterns.append(pattern)
                 await self._logger.debug(f"Created pattern for word '{word}': {pattern}")
-        
+
         if not patterns:
             await self._logger.warning("No valid filename patterns extracted from query")
             return []
-        
+
         await self._logger.info(f"Searching with {len(patterns)} pattern(s): {patterns}")
-        
+
         try:
             # Use GrepRetriever's filename search
             await self._logger.debug(f"Calling retrieve_by_filename with {len(patterns)} patterns")
@@ -682,52 +699,52 @@ class AgenticSearch(BaseSearch):
                 exclude=exclude or ["*.pyc", "*.log"],
                 timeout=grep_timeout,
             )
-            
+
             if results:
                 results = results[:top_k]
                 await self._logger.success(f" ✓ Found {len(results)} matching files", flush=True)
             else:
                 await self._logger.warning("No files matched the patterns")
-            
+
             return results
-        
+
         except Exception as e:
             await self._logger.error(f"Filename search failed: {e}")
             import traceback
             await self._logger.error(f"Traceback: {traceback.format_exc()}")
             return []
-    
+
     @staticmethod
     def _parse_summary_response(llm_response: str) -> tuple[str, bool]:
         """
         Parse LLM response to extract summary and save decision.
-        
+
         Args:
             llm_response: Raw LLM response containing SUMMARY and SHOULD_SAVE tags
-        
+
         Returns:
             Tuple of (summary_text, should_save_flag)
         """
         # Extract SUMMARY content
         summary_fields = extract_fields(content=llm_response, tags=["SUMMARY", "SHOULD_SAVE"])
-        
+
         summary = summary_fields.get("summary", "").strip()
         should_save_str = summary_fields.get("should_save", "true").strip().lower()
-        
+
         # Parse should_save flag
         should_save = should_save_str in ["true", "yes", "1"]
-        
+
         # If extraction failed, use entire response as summary and assume should save
         if not summary:
             summary = llm_response.strip()
             should_save = True
-        
+
         return summary, should_save
 
     @staticmethod
     def _extract_and_validate_multi_level_keywords(
-        llm_resp: str,
-        num_levels: int = 3
+            llm_resp: str,
+            num_levels: int = 3
     ) -> List[Dict[str, float]]:
         """
         Extract and validate multiple sets of keywords from LLM response.
@@ -742,7 +759,7 @@ class AgenticSearch(BaseSearch):
         keyword_sets: List[Dict[str, float]] = []
 
         # Generate tags dynamically based on num_levels
-        tags = [f"KEYWORDS_LEVEL_{i+1}" for i in range(num_levels)]
+        tags = [f"KEYWORDS_LEVEL_{i + 1}" for i in range(num_levels)]
 
         # Extract all fields at once
         extracted_fields = extract_fields(content=llm_resp, tags=tags)
@@ -799,12 +816,12 @@ class AgenticSearch(BaseSearch):
     # ------------------------------------------------------------------
 
     def _ensure_tool_registry(
-        self,
-        paths: List[str],
-        enable_dir_scan: bool = False,
-        max_depth: Optional[int] = 5,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
+            self,
+            paths: List[str],
+            enable_dir_scan: bool = False,
+            max_depth: Optional[int] = 5,
+            include: Optional[List[str]] = None,
+            exclude: Optional[List[str]] = None,
     ) -> "ToolRegistry":
         """Build (or rebuild) the tool registry for the given search paths.
 
@@ -836,8 +853,8 @@ class AgenticSearch(BaseSearch):
             tuple(exclude) if exclude else None,
         )
         if (
-            self._tool_registry is not None
-            and getattr(self, "_tool_registry_key", None) == cache_key
+                self._tool_registry is not None
+                and getattr(self, "_tool_registry_key", None) == cache_key
         ):
             return self._tool_registry
 
@@ -882,21 +899,21 @@ class AgenticSearch(BaseSearch):
     # ------------------------------------------------------------------
 
     async def search(
-        self,
-        query: str,
-        paths: Optional[Union[str, Path, List[str], List[Path]]] = None,
-        *,
-        mode: Literal["DEEP", "FAST", "FILENAME_ONLY"] = "FAST",
-        max_loops: int = 10,
-        max_token_budget: int = 128000,
-        max_depth: Optional[int] = 8,
-        top_k_files: int = 5,
-        enable_dir_scan: bool = False,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
-        return_context: bool = False,
-        spec_stale_hours: float = 72.0,
-        chat_history: Optional[List[Dict[str, str]]] = None,
+            self,
+            query: str,
+            paths: Optional[Union[str, Path, List[str], List[Path]]] = None,
+            *,
+            mode: Literal["DEEP", "FAST", "FILENAME_ONLY"] = "FAST",
+            max_loops: int = 10,
+            max_token_budget: int = 128000,
+            max_depth: Optional[int] = 8,
+            top_k_files: int = 5,
+            enable_dir_scan: bool = False,
+            include: Optional[List[str]] = None,
+            exclude: Optional[List[str]] = None,
+            return_context: bool = False,
+            spec_stale_hours: float = 72.0,
+            chat_history: Optional[List[Dict[str, str]]] = None,
     ) -> Union[str, SearchContext, List[Dict[str, Any]]]:
         """Perform intelligent search with multi-mode support.
 
@@ -1039,8 +1056,10 @@ class AgenticSearch(BaseSearch):
         if return_context:
             prefix = "FS" if mode == "FAST" else "DS"
             context.answer = answer
+            # Use read_file_ids from context if available, otherwise empty
+            fallback_files = list(context.read_file_ids) if context.read_file_ids else None
             context.cluster = cluster or self._make_answer_cluster(
-                query, answer, prefix,
+                query, answer, prefix, file_paths=fallback_files,
             )
             return context
         return answer
@@ -1050,18 +1069,18 @@ class AgenticSearch(BaseSearch):
     # ------------------------------------------------------------------
 
     async def _search_deep(
-        self,
-        query: str,
-        paths: List[str],
-        *,
-        max_loops: int = 10,
-        max_token_budget: int = 128000,
-        max_depth: Optional[int] = 5,
-        top_k_files: int = 5,
-        enable_dir_scan: bool = False,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
-        spec_stale_hours: float = 72.0,
+            self,
+            query: str,
+            paths: List[str],
+            *,
+            max_loops: int = 10,
+            max_token_budget: int = 128000,
+            max_depth: Optional[int] = 5,
+            top_k_files: int = 5,
+            enable_dir_scan: bool = False,
+            include: Optional[List[str]] = None,
+            exclude: Optional[List[str]] = None,
+            spec_stale_hours: float = 72.0,
     ) -> Tuple[str, Optional[KnowledgeCluster], SearchContext]:
         """Parallel multi-path retrieval pipeline (Phases 0a–5).
 
@@ -1079,7 +1098,7 @@ class AgenticSearch(BaseSearch):
         # ==============================================================
         direct = await self._try_direct_doc_analysis(query, paths)
         if direct is not None:
-            return direct, self._make_answer_cluster(query, direct, "DQ"), context
+            return direct, self._make_answer_cluster(query, direct, "DQ", file_paths=paths), context
 
         # ==============================================================
         # Phase 0: Cluster reuse (instant short-circuit)
@@ -1249,9 +1268,9 @@ class AgenticSearch(BaseSearch):
     # ------------------------------------------------------------------
 
     async def _try_direct_doc_analysis(
-        self,
-        query: str,
-        paths: List[str],
+            self,
+            query: str,
+            paths: List[str],
     ) -> Optional[str]:
         """Short-circuit for document-level queries (e.g. "请总结这篇文档").
 
@@ -1317,11 +1336,11 @@ class AgenticSearch(BaseSearch):
         return bool(_CHAT_QUERY_RE.match(query.strip()))
 
     async def _respond_chat(
-        self,
-        query: str,
-        context: Optional[SearchContext] = None,
-        *,
-        chat_history: Optional[List[Dict[str, str]]] = None,
+            self,
+            query: str,
+            context: Optional[SearchContext] = None,
+            *,
+            chat_history: Optional[List[Dict[str, str]]] = None,
     ) -> Tuple[str, Optional[KnowledgeCluster], SearchContext]:
         """Generate a direct conversational response (single LLM call, no retrieval)."""
         await self._logger.info(
@@ -1350,12 +1369,12 @@ class AgenticSearch(BaseSearch):
     _SUMMARY_MAX_FILE_SIZE = 200 * 1024 * 1024  # 200 MB — sampling handles large files
 
     async def _summarize_documents(
-        self,
-        query: str,
-        paths: List[str],
-        *,
-        top_k_files: int = 5,
-        scan_result=None,
+            self,
+            query: str,
+            paths: List[str],
+            *,
+            top_k_files: int = 5,
+            scan_result=None,
     ) -> Optional[str]:
         """Summarize documents from *paths* with smart content sampling.
 
@@ -1499,19 +1518,19 @@ class AgenticSearch(BaseSearch):
         ".html", ".htm", ".sh", ".toml", ".cfg", ".ini", ".conf",
         ".css", ".bash", ".java", ".c", ".cpp", ".h", ".go", ".rs",
     }
-    _FAST_CONTEXT_WINDOW = 30       # ± lines around each grep hit
+    _FAST_CONTEXT_WINDOW = 30  # ± lines around each grep hit
     _FAST_MAX_EVIDENCE_CHARS = 15_000
 
     async def _search_fast(
-        self,
-        query: str,
-        paths: List[str],
-        *,
-        max_depth: Optional[int] = 5,
-        top_k_files: int = 3,
-        enable_dir_scan: bool = False,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
+            self,
+            query: str,
+            paths: List[str],
+            *,
+            max_depth: Optional[int] = 5,
+            top_k_files: int = 3,
+            enable_dir_scan: bool = False,
+            include: Optional[List[str]] = None,
+            exclude: Optional[List[str]] = None,
     ) -> Tuple[str, Optional[KnowledgeCluster], SearchContext]:
         """Greedy search: 2-3 LLM calls, single best file, focused evidence.
 
@@ -1582,16 +1601,17 @@ class AgenticSearch(BaseSearch):
                     scan_result=None,
                 )
                 if answer:
-                    return answer, self._make_answer_cluster(query, answer, "FS"), context
+                    return answer, self._make_answer_cluster(query, answer, "FS", file_paths=summary_paths), context
             # No hint or resolve failed: run dir scan (if enabled) then rank + summarize
-            scan_result = await self._probe_dir_scan(paths, enable=enable_dir_scan, max_files=300) if enable_dir_scan else None
+            scan_result = await self._probe_dir_scan(paths, enable=enable_dir_scan,
+                                                     max_files=300) if enable_dir_scan else None
             answer = await self._summarize_documents(
                 query, paths,
                 top_k_files=top_k_files,
                 scan_result=scan_result,
             )
             if answer:
-                return answer, self._make_answer_cluster(query, answer, "FS"), context
+                return answer, self._make_answer_cluster(query, answer, "FS", file_paths=paths), context
             await self._logger.info("[FAST:Step1] Summary fallback — no documents, continuing search")
 
         primary = analysis.get("primary", [])[:2]
@@ -1725,12 +1745,12 @@ class AgenticSearch(BaseSearch):
     # ---- FAST helpers ----
 
     async def _fast_find_best_file(
-        self,
-        keywords: List[str],
-        paths: List[str],
-        max_depth: Optional[int] = 5,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
+            self,
+            keywords: List[str],
+            paths: List[str],
+            max_depth: Optional[int] = 5,
+            include: Optional[List[str]] = None,
+            exclude: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Search per keyword via rga and return the single best-matching file.
 
@@ -1798,9 +1818,9 @@ class AgenticSearch(BaseSearch):
         return merged[0]
 
     async def _fast_sample_evidence(
-        self,
-        file_path: str,
-        match_objects: List[Dict[str, Any]],
+            self,
+            file_path: str,
+            match_objects: List[Dict[str, Any]],
     ) -> str:
         """Build focused evidence from grep hits: context windows for text
         files, raw match snippets for binary formats.
@@ -1852,10 +1872,10 @@ class AgenticSearch(BaseSearch):
 
     @staticmethod
     def _read_context_windows(
-        file_path: str,
-        hit_lines: List[int],
-        window: int = 30,
-        max_chars: int = 15_000,
+            file_path: str,
+            hit_lines: List[int],
+            window: int = 30,
+            max_chars: int = 15_000,
     ) -> Optional[str]:
         """Read context windows around *hit_lines* from a text file.
 
@@ -1903,7 +1923,7 @@ class AgenticSearch(BaseSearch):
 
     @staticmethod
     async def _fast_read_file_head(
-        file_path: str, max_chars: int = 8_000,
+            file_path: str, max_chars: int = 8_000,
     ) -> str:
         """Read the head of a file as last-resort evidence."""
         try:
@@ -1947,7 +1967,7 @@ class AgenticSearch(BaseSearch):
     # ------------------------------------------------------------------
 
     async def _probe_keywords(
-        self, query: str,
+            self, query: str,
     ) -> Tuple[Dict[str, float], List[str]]:
         """Extract multi-level keywords from the query via LLM.
 
@@ -1993,9 +2013,9 @@ class AgenticSearch(BaseSearch):
 
     @staticmethod
     def _resolve_file_hints(
-        paths: List[str],
-        file_hints: List[str],
-        max_depth: int = 8,
+            paths: List[str],
+            file_hints: List[str],
+            max_depth: int = 8,
     ) -> List[str]:
         """Resolve file_hints (filenames) to absolute paths under *paths*.
 
@@ -2068,10 +2088,10 @@ class AgenticSearch(BaseSearch):
         return out
 
     async def _probe_dir_scan(
-        self,
-        paths: List[str],
-        enable: bool = True,
-        max_files: int = 500,
+            self,
+            paths: List[str],
+            enable: bool = True,
+            max_files: int = 500,
     ):
         """Scan directories for file metadata (filesystem only, no LLM).
 
@@ -2102,7 +2122,7 @@ class AgenticSearch(BaseSearch):
         return scan_result
 
     async def _probe_knowledge_cache(
-        self, query: str,
+            self, query: str,
     ) -> List[str]:
         """Search knowledge cache for related clusters, return known file paths.
 
@@ -2139,12 +2159,12 @@ class AgenticSearch(BaseSearch):
     # ------------------------------------------------------------------
 
     async def _retrieve_by_keywords(
-        self,
-        keywords: List[str],
-        paths: List[str],
-        max_depth: Optional[int] = 5,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
+            self,
+            keywords: List[str],
+            paths: List[str],
+            max_depth: Optional[int] = 5,
+            include: Optional[List[str]] = None,
+            exclude: Optional[List[str]] = None,
     ) -> List[str]:
         """Run keyword search via rga and return discovered file paths.
 
@@ -2174,12 +2194,12 @@ class AgenticSearch(BaseSearch):
         return discovered
 
     async def _rank_dir_scan_candidates(
-        self,
-        query: str,
-        scan_result,
-        *,
-        top_k: int = 20,
-        include_medium: bool = False,
+            self,
+            query: str,
+            scan_result,
+            *,
+            top_k: int = 20,
+            include_medium: bool = False,
     ) -> List[str]:
         """Run LLM ranking on dir_scan candidates and return relevant paths.
 
@@ -2202,13 +2222,13 @@ class AgenticSearch(BaseSearch):
         return paths
 
     async def _scan_and_rank_paths(
-        self,
-        query: str,
-        paths: List[str],
-        *,
-        max_files: int = 300,
-        top_k: int = 20,
-        include_medium: bool = True,
+            self,
+            query: str,
+            paths: List[str],
+            *,
+            max_files: int = 300,
+            top_k: int = 20,
+            include_medium: bool = True,
     ) -> List[str]:
         """Scan directories and return LLM-ranked relevant file paths.
 
@@ -2237,9 +2257,9 @@ class AgenticSearch(BaseSearch):
 
     @staticmethod
     def _merge_file_paths(
-        keyword_files: List[str],
-        dir_scan_files: List[str],
-        knowledge_hits: List[str],
+            keyword_files: List[str],
+            dir_scan_files: List[str],
+            knowledge_hits: List[str],
     ) -> List[str]:
         """Merge file paths from all retrieval paths, dedup, preserve priority.
 
@@ -2256,12 +2276,12 @@ class AgenticSearch(BaseSearch):
         return merged
 
     async def _build_cluster(
-        self,
-        query: str,
-        file_paths: List[str],
-        query_keywords: Dict[str, float],
-        top_k_files: int = 5,
-        top_k_snippets: int = 5,
+            self,
+            query: str,
+            file_paths: List[str],
+            query_keywords: Dict[str, float],
+            top_k_files: int = 5,
+            top_k_snippets: int = 5,
     ) -> Optional[KnowledgeCluster]:
         """Build a KnowledgeCluster via knowledge_base.build().
 
@@ -2305,7 +2325,7 @@ class AgenticSearch(BaseSearch):
     # ------------------------------------------------------------------
 
     async def _summarise_cluster(
-        self, query: str, cluster: KnowledgeCluster,
+            self, query: str, cluster: KnowledgeCluster,
     ) -> Tuple[str, bool]:
         """Generate a final answer summary from a KnowledgeCluster.
 
@@ -2336,17 +2356,17 @@ class AgenticSearch(BaseSearch):
         return summary, should_save
 
     async def _react_refinement(
-        self,
-        query: str,
-        paths: List[str],
-        initial_keywords: List[str],
-        spec_context: str,
-        enable_dir_scan: bool,
-        max_loops: int,
-        max_token_budget: int,
-        max_depth: Optional[int] = 5,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
+            self,
+            query: str,
+            paths: List[str],
+            initial_keywords: List[str],
+            spec_context: str,
+            enable_dir_scan: bool,
+            max_loops: int,
+            max_token_budget: int,
+            max_depth: Optional[int] = 5,
+            include: Optional[List[str]] = None,
+            exclude: Optional[List[str]] = None,
     ) -> Tuple[str, SearchContext]:
         """Fall back to ReAct loop when parallel probing yields insufficient evidence.
 
@@ -2382,12 +2402,12 @@ class AgenticSearch(BaseSearch):
         return answer, context
 
     async def _build_cluster_from_context(
-        self,
-        query: str,
-        answer: str,
-        context: SearchContext,
-        query_keywords: Dict[str, float],
-        top_k_files: int = 5,
+            self,
+            query: str,
+            answer: str,
+            context: SearchContext,
+            query_keywords: Dict[str, float],
+            top_k_files: int = 5,
     ) -> Optional[KnowledgeCluster]:
         """Build a KnowledgeCluster from files discovered during a ReAct session.
 
@@ -2440,10 +2460,10 @@ class AgenticSearch(BaseSearch):
         return self.spec_path / f"{self._spec_hash(path_str)}.json"
 
     async def _load_spec_context(
-        self,
-        paths: List[str],
-        *,
-        stale_hours: float = 72.0,
+            self,
+            paths: List[str],
+            *,
+            stale_hours: float = 72.0,
     ) -> str:
         """Load cached spec context for each search path and merge.
 
@@ -2505,10 +2525,10 @@ class AgenticSearch(BaseSearch):
         return "\n\n".join(parts)
 
     async def _save_spec_context(
-        self,
-        paths: List[str],
-        context: SearchContext,
-        scan_result=None,
+            self,
+            paths: List[str],
+            context: SearchContext,
+            scan_result=None,
     ) -> None:
         """Persist spec-path context for each search path.
 
