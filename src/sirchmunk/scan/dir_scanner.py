@@ -14,11 +14,18 @@ import json
 import logging
 import mimetypes
 import os
+import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+
+try:
+    import pypdf as _pypdf
+except ImportError:
+    _pypdf = None  # type: ignore[assignment]
 
 from sirchmunk.llm.openai_chat import OpenAIChat
 from sirchmunk.utils.file_utils import fast_extract
@@ -556,8 +563,6 @@ class DirectoryScanner:
         - Text files: read the first ``max_preview_chars`` bytes directly.
         - Everything else: filename + size only (no IO beyond stat).
         """
-        import signal
-
         candidate = FileCandidate(
             path=str(file_path),
             filename=file_path.name,
@@ -591,22 +596,31 @@ class DirectoryScanner:
         Uses a daemon thread so the timeout is truly enforced: on expiry the
         thread is abandoned (daemon threads do not block process exit) and the
         candidate retains its stat-only fields.
+
+        Logger suppression is managed in the *calling* thread with a
+        try/finally block so the original level is always restored, even when
+        the worker thread times out or the caller raises.
         """
-        import threading
-        import warnings
-        import logging as _logging
+        if _pypdf is None:
+            return
 
         result_box: list = []
 
+        # Suppress noisy pypdf warnings in the calling thread before spawning,
+        # so the suppression covers the thread's lifetime and is always undone.
+        _pypdf_reader_logger = logging.getLogger("pypdf._reader")
+        _pypdf_logger = logging.getLogger("pypdf")
+        _prev_reader_level = _pypdf_reader_logger.level
+        _prev_level = _pypdf_logger.level
+        _pypdf_reader_logger.setLevel(logging.ERROR)
+        _pypdf_logger.setLevel(logging.ERROR)
+
         def _read():
             try:
-                _logging.getLogger("pypdf._reader").setLevel(_logging.ERROR)
-                _logging.getLogger("pypdf").setLevel(_logging.ERROR)
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore")
-                    import pypdf
                     with open(path, "rb") as f:
-                        reader = pypdf.PdfReader(f, strict=False)
+                        reader = _pypdf.PdfReader(f, strict=False)
                         page_count = len(reader.pages)
                         text = reader.pages[0].extract_text() if page_count > 0 else ""
                     result_box.append((page_count, text or ""))
@@ -614,8 +628,12 @@ class DirectoryScanner:
                 result_box.append(exc)
 
         t = threading.Thread(target=_read, daemon=True)
-        t.start()
-        t.join(timeout=timeout_s)
+        try:
+            t.start()
+            t.join(timeout=timeout_s)
+        finally:
+            _pypdf_reader_logger.setLevel(_prev_reader_level)
+            _pypdf_logger.setLevel(_prev_level)
 
         if not result_box:
             logger.debug(f"[DirScanner] PDF first-page timed out ({timeout_s}s): {path.name}")
